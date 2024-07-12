@@ -1,0 +1,261 @@
+var l8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2");
+
+//Meng-filter Citra Landsat 8 Berdasarkan Waktu
+var l8table = l8.filterBounds(table);
+
+//Meng-filter Citra Landsat 8 Berdasarkan Waktu
+var l8tabledate = l8table.filterDate('2023-1-1', '2023-12-31');
+print(l8tabledate);
+
+Map.addLayer(l8tabledate);
+
+// Cloud Masking Citra Landsat 8
+
+var masking = function(img) {
+  // Bitmask untuk bayangan awan
+  var cloudshadowbitmask = (1 << 3);
+  var cloudshadowmask = (1 << 5);
+
+  // Memilih band QA_PIXEL
+  var qa = img.select('QA_PIXEL');
+
+  // Membuat mask untuk bayangan awan
+  var maskshadow = qa.bitwiseAnd(cloudshadowbitmask).eq(0);
+
+  // Membuat mask untuk awan
+  var maskcloud = qa.bitwiseAnd(cloudshadowmask).eq(0);
+
+  // Menggabungkan mask bayangan awan dan mask awan
+  var mask = maskshadow.and(maskcloud);
+
+  // Memperbarui mask citra dengan mask yang telah dibuat
+  return img.updateMask(mask);
+};
+
+// Memuat kumpulan data Landsat 8 yang jernih
+var l8Clear = l8tabledate.sort('CLOUD_COVER_LAND')
+              .map(masking)
+              .median();
+
+// Menambahkan layer citra Landsat 8 yang jernih ke peta
+Map.addLayer(l8Clear );
+// Scaling Factors                                       I
+var scale = function applyScaleFactors(image) {
+var opticalBands =
+image.select('SR_B.').multiply(0.0000275).add(-0.2);
+var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+
+return image.addBands(opticalBands, null, true)
+                .addBands (thermalBands, null, true);
+};
+//Clip Citra Landsat 8
+var l8Clip =l8Clear.clip(table);
+var l8scale = scale(l8Clip);
+var composite = l8scale;
+var composite = composite.toFloat();
+
+//Display Citra True Color
+var visualisasi = {bands: ['SR_B4', 'SR_B3', 'SR_B2'], max:0.1};
+Map.addLayer(composite, visualisasi, 'komposit warna nyata');
+
+//Pendefinisian Band
+var swir = composite.select('SR_B6');
+var nir = composite.select('SR_B5');
+var red = composite.select('SR_B4');
+var green = composite.select('SR_B3');
+
+//NDVI
+var ndvi = nir.subtract(red).divide(nir.add(red));
+var ndvi = ndvi.clip(table);
+var ndvi1 = ee.Image(1)
+          .where(ndvi.gt(-1).and(ndvi.lte(0.11)), 2)
+          .where(ndvi.gt(0.11).and(ndvi.lte(0.25)), 3)
+          .where(ndvi.gt(0.25).and(ndvi.lte(0.33)), 4)
+          .where(ndvi.gt(0.33).and(ndvi.lte(0.45)), 5)
+          .where(ndvi.gt(0.45).and(ndvi.lte(1)), 6);
+var ndvi2 = ndvi1.clip(table);
+Map.addLayer(ndvi2, {min:2, max:6, palette:['red', 'orange', 'yellow', 'limegreen', 'green']}, 'Klasifikasi NDVI');
+
+//NDBI
+var ndbi = swir.subtract(nir).divide(swir.add(nir));
+var ndbi = ndbi.clip(table);
+var ndbi2 = ee.Image(1)
+          .where(ndbi.gt(-1).and(ndbi.lte(-0.4)), 2)
+          .where(ndbi.gt(-0.4).and(ndbi.lte(-0.3)), 3)
+          .where(ndbi.gt(-0.3).and(ndbi.lte(-0.15)), 4)
+          .where(ndbi.gt(-0.15).and(ndbi.lte(0.37)), 5);
+var ndbi2 = ndbi2.clip(table);
+Map.addLayer(ndbi2, {min:2, max:5, palette:['green', 'limegreen', 'orange',  'red']}, 'Klasifikasi NDBI');
+
+//NDWI
+var ndwi = green.subtract(nir).divide(green.add(nir));
+var ndwi = ndwi.clip(table);
+var ndwi2 = ee.Image(1)
+          .where(ndwi.gt(-1).and(ndwi.lte(-0.66)), 2)
+          .where(ndwi.gt(-0.66).and(ndwi.lte(-0.33)), 3)
+          .where(ndwi.gt(-0.33).and(ndwi.lte(1)), 4);
+var ndwi2 = ndwi2.clip(table);
+Map.addLayer(ndwi2, {min:2, max:4, palette:['cyan', 'darkcyan', 'blue']}, 'Klasifikasi NDWI');
+
+
+//LUASAN
+
+//Memisahkan Algoritma
+var air = ndwi.gt(0.1);
+var bangunan = ndbi.gt(-0.1).and(air.eq(0));
+var vegetasi = ndvi.gt(0.3).and(bangunan.eq(0)).and(air.eq(0));
+
+//Membagi Kelas Vegetasi//
+var vegetasi0=ndvi.gt(-1).and(ndvi.lte(0.11)).and(bangunan.eq(0)).and(air.eq(0));
+var vegetasi1=ndvi.gt(0.11).and(ndvi.lte(0.25)).and(bangunan.eq(0)).and(air.eq(0));
+var vegetasi2=ndvi.gt(0.25).and(ndvi.lte(0.33)).and(bangunan.eq(0)).and(air.eq(0));
+var vegetasi3=ndvi.gt(0.33).and(ndvi.lte(0.45)).and(bangunan.eq(0)).and(air.eq(0));
+var vegetasi4=ndvi.gt(0.45).and(ndvi.lte(1)).and(bangunan.eq(0)).and(air.eq(0));
+Map.addLayer(vegetasi.selfMask(),{palette:['green']},'Vegetasi Lebat 2023');
+
+//Menghitung Luas Vegetasi//
+var luasvegetasi0 = vegetasi0.multiply(ee.Image.pixelArea());
+var area = luasvegetasi0.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B5'))
+  .divide(1e4);
+print('Luas Non Vegetasi (hektar)', areahectar);
+
+var luasvegetasi1 = vegetasi1.multiply(ee.Image.pixelArea());
+var area = luasvegetasi1.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar = ee.Number(area.get('SR_B5'))
+  .divide(1e4);
+print('Luas Vegetasi sangat rendah (hektar)', areahectar);
+
+var luasvegetasi2 = vegetasi2.multiply(ee.Image.pixelArea());
+var area = luasvegetasi2.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B5'))
+  .divide(1e4);
+print('Luas Vegetasi Rendah (hektar)', areahectar);
+
+var luasvegetasi3 = vegetasi3.multiply(ee.Image.pixelArea());
+var area = luasvegetasi3.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B5'))
+  .divide(1e4);
+print('Luas Vegetasi Sedang (hektar)', areahectar);
+
+var luasvegetasi4 = vegetasi4.multiply(ee.Image.pixelArea());
+var area = luasvegetasi4.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B5'))
+  .divide(1e4);
+print('Luas Vegetasi Tinggi (Hektar)', areahectar);
+
+//Bangunan//
+var bangunan0 = ndbi.gt(-1).and(ndbi.lte(-0.4)).and(air.eq(0));
+var bangunan1 = ndbi.gt(-0.4).and(ndbi.lte(-0.3)).and(air.eq(0));
+var bangunan2 = ndbi.gt(-0.3).and(ndbi.lte(-0.15)).and(air.eq(0));
+var bangunan3 = ndbi.gt(-0.15).and(ndbi.lte(0.37)).and(air.eq(0));
+Map.addLayer(bangunan.selfMask(), {palette: ['red']}, 'Bangunan 2023');
+
+//Menghitung Luas Bangunan//
+var luasbangunan0 = bangunan0.multiply(ee.Image.pixelArea());
+var area = luasbangunan0.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B6'))
+                .divide(1e4);
+print('Luas Non Pemukiman (hektar)', areahectar);
+
+var luasbangunan1 = bangunan1.multiply(ee.Image.pixelArea());
+var area = luasbangunan1.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B6'))
+                .divide(1e4);
+print('Luas Pemukiman Jarang (hektar)', areahectar);
+var luasbangunan2 = bangunan2.multiply(ee.Image.pixelArea());
+var area = luasbangunan2.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B6'))
+                .divide(1e4);
+print('Luas Pemukiman Rapat (hektar)', areahectar);
+var luasbangunan3 = bangunan3.multiply(ee.Image.pixelArea());
+var area = luasbangunan3.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar= ee.Number(area.get('SR_B6'))
+                .divide(1e4);
+print('Luas Pemukiman Sangat Rapat (hektar)', areahectar);
+
+//Air
+var air = ndwi.gt(0.1);
+var air0 = ndwi.gt(-1).and(ndwi.lte(-0.66));
+var air1 = ndwi.gt(-0.66).and(ndwi.lte(-0.33));
+var air2 = ndwi.gt(-0.33).and(ndwi.lte(1));
+Map.addLayer(air.selfMask(), {palette:['blue']}, 'Air 2023');
+
+//Menghitung Luas Air
+var luasair0 = air0.multiply(ee.Image.pixelArea());
+var area = luasair0.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar = ee.Number(area.get('SR_B3'))
+                .divide(1e4);
+print('Non Badan Air (hektar)', areahectar);
+
+var luasair1 = air1.multiply(ee.Image.pixelArea());
+var area = luasair1.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar = ee.Number(area.get('SR_B3'))
+                .divide(1e4);
+print('Kebasahan Sedang (hektar)', areahectar);
+
+var luasair2 = air2.multiply(ee.Image.pixelArea());
+var area = luasair2.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+});
+var areahectar = ee.Number(area.get('SR_B3'))
+                .divide(1e4);
+print('Kebasahan Tinggi (hektar)', areahectar);

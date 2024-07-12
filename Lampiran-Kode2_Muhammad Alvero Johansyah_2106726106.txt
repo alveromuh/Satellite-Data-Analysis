@@ -1,0 +1,152 @@
+// Pemanggilan data citra Landsat 8
+var l8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+  .filterBounds(table)
+  .filterDate('2023-1-1', '2023-12-31');
+
+// Cloud Masking Function
+var masking = function(img) {
+  var cloudshadowbitmask = (1 << 3);
+  var cloudshadowmask = (1 << 5);
+  var qa = img.select('QA_PIXEL');
+  var maskshadow = qa.bitwiseAnd(cloudshadowbitmask).eq(0);
+  var maskcloud = qa.bitwiseAnd(cloudshadowmask).eq(0);
+  var mask = maskshadow.and(maskcloud);
+  return img.updateMask(mask);
+};
+
+// Apply cloud masking and scaling factors
+var applyScaleFactors = function(image) {
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBands, null, true);
+};
+
+var l8Collection = l8.map(masking).map(applyScaleFactors);
+
+// Function to calculate indices
+var calculateIndices = function(image) {
+  var swir = image.select('SR_B6');
+  var nir = image.select('SR_B5');
+  var red = image.select('SR_B4');
+  var green = image.select('SR_B3');
+  
+  var ndvi = nir.subtract(red).divide(nir.add(red)).rename('NDVI');
+  var ndbi = swir.subtract(nir).divide(swir.add(nir)).rename('NDBI');
+  var ndwi = green.subtract(nir).divide(green.add(nir)).rename('NDWI');
+  
+  return image.addBands(ndvi).addBands(ndbi).addBands(ndwi);
+};
+
+var indicesCollection = l8Collection.map(calculateIndices);
+
+// Function to reduce regions and calculate mean values
+var reduceRegionMean = function(image) {
+  var ndvi = image.select('NDVI').reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: table,
+    scale: 30,
+    maxPixels: 1e8
+  }).get('NDVI');
+  
+  var ndbi = image.select('NDBI').reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: table,
+    scale: 30,
+    maxPixels: 1e8
+  }).get('NDBI');
+  
+  var ndwi = image.select('NDWI').reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: table,
+    scale: 30,
+    maxPixels: 1e8
+  }).get('NDWI');
+  
+  return ee.Feature(null, {
+    'system:time_start': image.get('system:time_start'),
+    'NDVI': ndvi,
+    'NDBI': ndbi,
+    'NDWI': ndwi
+  });
+};
+
+var reducedCollection = indicesCollection.map(reduceRegionMean);
+
+// Filter out features with null values
+var filteredCollection = reducedCollection.filter(ee.Filter.notNull(['NDVI', 'NDBI', 'NDWI']));
+
+// Convert the collection of Features to a FeatureCollection
+var featureCollection = ee.FeatureCollection(filteredCollection);
+
+// Create a scatterplot for NDVI
+var chartNDVI = ui.Chart.feature.byFeature({
+  features: featureCollection,
+  xProperty: 'system:time_start',
+  yProperties: ['NDVI']
+}).setChartType('ScatterChart')
+  .setOptions({
+  title: 'NDVI Over Time',
+  vAxis: {title: 'NDVI', viewWindow: {min: 0, max: 1}},
+  hAxis: {title: 'Date', format: 'MM-yy'},
+  pointSize: 4,
+  series: {
+    0: {color: 'blue'}
+  }
+});
+
+// Create a scatterplot for NDBI
+var chartNDBI = ui.Chart.feature.byFeature({
+  features: featureCollection,
+  xProperty: 'system:time_start',
+  yProperties: ['NDBI']
+}).setChartType('ScatterChart')
+  .setOptions({
+  title: 'NDBI Over Time',
+  vAxis: {title: 'NDBI'},
+  hAxis: {title: 'Date', format: 'MM-yy'},
+  pointSize: 4,
+  series: {
+    0: {color: 'red'}
+  }
+});
+
+// Create a scatterplot for NDWI
+var chartNDWI = ui.Chart.feature.byFeature({
+  features: featureCollection,
+  xProperty: 'system:time_start',
+  yProperties: ['NDWI']
+}).setChartType('ScatterChart')
+  .setOptions({
+  title: 'NDWI Over Time',
+  vAxis: {title: 'NDWI'},
+  hAxis: {title: 'Date', format: 'MM-yy'},
+  pointSize: 4,
+  series: {
+    0: {color: 'green'}
+  }
+});
+
+// Print the charts to the console
+print(chartNDVI);
+print(chartNDBI);
+print(chartNDWI);
+
+// Menghitung mean NDVI
+var ndviStats = featureCollection.aggregate_stats('NDVI');
+var ndviMean = ndviStats.get('mean');
+
+// Menghitung mean NDBI
+var ndbiStats = featureCollection.aggregate_stats('NDBI');
+var ndbiMean = ndbiStats.get('mean');
+
+// Menghitung mean NDWI
+var ndwiStats = featureCollection.aggregate_stats('NDWI');
+var ndwiMean = ndwiStats.get('mean');
+
+// Mencetak hasil
+print('NDVI Mean: ', ndviMean);
+
+print('NDBI Mean: ', ndbiMean);
+
+print('NDWI Mean: ', ndwiMean);
